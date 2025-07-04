@@ -1,6 +1,5 @@
 # BlockAnnotator: 交互式系统框图标注工具
 
-![BlockAnnotator Screenshot](https://raw.githubusercontent.com/your-username/BlockAnnotator/main/docs/screenshot.png) <!-- 建议您截一张软件运行的图，并替换此处的链接 -->
 
 一款使用 PyQt6 开发的、专为系统框图（System Block Diagram）设计的交互式标注工具。它旨在帮助工程师和研究人员高效地识别组件、标注属性及复杂的连接关系，并最终生成结构化的 JSON 数据。
 
