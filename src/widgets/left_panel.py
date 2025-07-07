@@ -9,6 +9,7 @@ class LeftPanel(QWidget):
     save_requested = pyqtSignal()
     prev_image_requested = pyqtSignal()
     next_image_requested = pyqtSignal()
+    skip_image_requested = pyqtSignal() # New signal
     toggle_connections_view_requested = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -35,17 +36,20 @@ class LeftPanel(QWidget):
         nav_layout = QVBoxLayout()
         self.btn_prev = QPushButton("Previous Image (A)")
         self.btn_next = QPushButton("Next Image (D)")
+        self.btn_skip = QPushButton("Skip Image (S)") # New button
         self.btn_prev.clicked.connect(self.prev_image_requested)
         self.btn_next.clicked.connect(self.next_image_requested)
+        self.btn_skip.clicked.connect(self.skip_image_requested) # Connect new button
+        self.btn_skip.setShortcut("S")
         nav_layout.addWidget(self.btn_prev)
         nav_layout.addWidget(self.btn_next)
+        nav_layout.addWidget(self.btn_skip) # Add new button
         nav_group.setLayout(nav_layout)
         
         anno_group = QGroupBox("Annotation Tools")
         anno_layout = QVBoxLayout()
         self.btn_draw_box = QPushButton("Annotate Component (W)")
         
-        # --- NEW SIMPLIFIED BUTTONS ---
         self.btn_connect_uni = QPushButton("Unidirectional Arrow (O)")
         self.btn_connect_bi = QPushButton("Bidirectional Arrow (N)")
         

@@ -1,8 +1,8 @@
 # src/image_viewer.py
+import math
 from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
-from PyQt6.QtCore import Qt, QPointF, QRectF, pyqtSignal
+from PyQt6.QtCore import Qt, QPointF, QRectF, pyqtSignal, QLineF
 from PyQt6.QtGui import QPixmap, QPen, QColor, QPainter
-
 from src.widgets.base_items import ComponentRectItem
 from src.drawing_items import ArrowItem
 
@@ -30,7 +30,6 @@ class ImageViewer(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
-    # --- FIX: Added the 'force' keyword argument to match the call from MainWindow ---
     def set_mode(self, mode, force=False):
         self.current_mode = mode
         if 'drawing_box' in mode:
@@ -57,68 +56,89 @@ class ImageViewer(QGraphicsView):
         self.fitInView(self.image_item, Qt.AspectRatioMode.KeepAspectRatio)
 
     def update_annotations(self, data_model, show_all_connections, selected_component_name):
+        # Clear old annotations (rects and arrows)
         for item in self.scene.items():
             if item != self.image_item:
                 self.scene.removeItem(item)
         self.component_rects.clear()
 
+        # Draw component rects
+        if not data_model: return
         for name, details in data_model.components.items():
             box = details['component_box']
             rect = QRectF(box[0], box[1], box[2] - box[0], box[3] - box[1])
             rect_item = ComponentRectItem(rect)
-            rect_item.setData(0, name)
+            rect_item.setData(0, name) # Store name in item data
             self.scene.addItem(rect_item)
             self.component_rects[name] = rect_item
         
+        # Draw connections
         self._render_connections(data_model, show_all_connections, selected_component_name)
 
     def _render_connections(self, data_model, show_all, selected_name):
         color_output = QColor("#e06c75")
         color_input = QColor("#98c379")
         color_inout = QColor("#61afef")
-
-        all_edges = []
+        
         drawn_pairs = set()
-        for source, details in data_model.components.items():
-            for conn in details['connections'].get('output', []):
-                target = conn['name']
-                pair = tuple(sorted((source, target)))
+
+        for source_name, details in data_model.components.items():
+            connections = details.get('connections', {})
+            
+            # Unidirectional (output -> input)
+            for conn in connections.get('output', []):
+                target_name = conn.get('name')
+                pair = tuple(sorted((source_name, target_name)))
                 if pair not in drawn_pairs:
-                    all_edges.append({'source': source, 'target': target, 'type': 'output'})
-                    drawn_pairs.add(pair)
-            for conn in details['connections'].get('inout', []):
-                target = conn['name']
-                pair = tuple(sorted((source, target)))
-                if pair not in drawn_pairs:
-                    all_edges.append({'source': source, 'target': target, 'type': 'inout'})
+                    self._draw_arrow_if_visible(data_model, source_name, target_name, 'output', conn, show_all, selected_name, color_output, color_input, color_inout)
                     drawn_pairs.add(pair)
 
-        for edge in all_edges:
-            source, target, conn_type = edge['source'], edge['target'], edge['type']
-            if source not in self.component_rects or target not in self.component_rects:
-                continue
+            # Bidirectional (inout <-> inout)
+            for conn in connections.get('inout', []):
+                target_name = conn.get('name')
+                pair = tuple(sorted((source_name, target_name)))
+                if pair not in drawn_pairs:
+                    self._draw_arrow_if_visible(data_model, source_name, target_name, 'inout', conn, show_all, selected_name, color_output, color_input, color_inout)
+                    drawn_pairs.add(pair)
 
-            start_item = self.component_rects[source]
-            end_item = self.component_rects[target]
+    def _draw_arrow_if_visible(self, data_model, source, target, conn_type, conn_details, show_all, selected_name, c_out, c_in, c_inout):
+        if source not in self.component_rects or target not in self.component_rects: return
 
-            to_draw = False
-            color = QColor()
-            is_bidirectional = False
+        start_item, end_item = self.component_rects[source], self.component_rects[target]
+        to_draw = False
+        color = QColor()
+        is_bidirectional = (conn_type == 'inout')
+        
+        if show_all:
+            to_draw = True
+            color = c_inout if is_bidirectional else c_out
+        elif selected_name and (source == selected_name or target == selected_name):
+            to_draw = True
+            if is_bidirectional:
+                color = c_inout
+            else: # Unidirectional
+                # If we selected the source, it's an output (red)
+                # If we selected the target, it's an input (green)
+                color = c_out if source == selected_name else c_in
+        
+        if to_draw:
+            count = conn_details.get('count', 1)
+            line_vec = end_item.sceneBoundingRect().center() - start_item.sceneBoundingRect().center()
+            if line_vec.isNull(): return
+            
+            # Calculate perpendicular vector for offset
+            perp_vec = QPointF(line_vec.y(), -line_vec.x())
+            norm_perp = perp_vec / math.sqrt(QPointF.dotProduct(perp_vec, perp_vec)) if not perp_vec.isNull() else QPointF()
+            
+            spacing = 15.0 # Pixel spacing between parallel lines
 
-            if show_all:
-                to_draw = True
-                is_bidirectional = (conn_type == 'inout')
-                color = color_inout if is_bidirectional else color_output
-            elif selected_name and (source == selected_name or target == selected_name):
-                to_draw = True
-                is_bidirectional = (conn_type == 'inout')
-                if is_bidirectional:
-                    color = color_inout
-                else:
-                    color = color_output if source == selected_name else color_input
-
-            if to_draw:
-                arrow = ArrowItem(start_item, end_item, color, source, target, is_bidirectional)
+            for i in range(count):
+                # Offset lines from the center
+                offset_val = (i - (count - 1) / 2.0) * spacing
+                offset_vec = norm_perp * offset_val
+                
+                # Create arrow with offset
+                arrow = ArrowItem(start_item, end_item, color, source, target, is_bidirectional, offset=offset_vec)
                 self.scene.addItem(arrow)
 
     def highlight_component_rect(self, name, select=True):
@@ -132,20 +152,17 @@ class ImageViewer(QGraphicsView):
         else: super().keyPressEvent(event)
 
     def mousePressEvent(self, event):
-        item_at_pos = self.itemAt(event.pos())
-        if not item_at_pos and 'idle' in self.current_mode:
-            self.component_clicked.emit(None)
-            
-        pos = self.mapToScene(event.pos())
+        scene_pos = self.mapToScene(event.pos())
+        component_name_at_pos = self.get_component_name_at(scene_pos)
+        
         if 'drawing_box' in self.current_mode and event.button() == Qt.MouseButton.LeftButton:
-            self.start_pos = pos
+            self.start_pos = scene_pos
             rect_item = ComponentRectItem(QRectF(self.start_pos, self.start_pos))
             rect_item.setPen(QPen(Qt.GlobalColor.cyan, 2, Qt.PenStyle.DashLine))
             self.temp_rect = rect_item
             self.scene.addItem(self.temp_rect)
-        elif 'connect' in self.current_mode:
-            component_name = self.get_component_name_at(pos)
-            self.component_clicked.emit(component_name)
+        elif 'connect' in self.current_mode or 'idle' in self.current_mode:
+             self.component_clicked.emit(component_name_at_pos)
         else:
             super().mousePressEvent(event)
 
@@ -169,7 +186,6 @@ class ImageViewer(QGraphicsView):
             if rect.width() > 5 and rect.height() > 5:
                 self.box_drawn.emit(rect)
             self.temp_rect, self.start_pos = None, None
-            # The calling function in MainWindow will handle setting mode
         else: super().mouseReleaseEvent(event)
             
     def resizeEvent(self, event):

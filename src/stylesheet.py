@@ -2,9 +2,9 @@
 
 STYLE_SHEET = """
 QWidget {
-    /* Use a more cross-platform friendly font stack */
+    /* Use a more cross-platform friendly font stack and larger base font size */
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    font-size: 10pt;
+    font-size: 12pt;
 }
 
 QMainWindow {
@@ -21,7 +21,6 @@ QSplitter::handle:hover {
 QSplitter::handle:pressed {
     background-color: #586999;
 }
-
 
 QGroupBox {
     color: #abb2bf;
@@ -57,7 +56,6 @@ QPushButton:disabled {
     color: #9da5b4;
 }
 
-
 QListWidget {
     background-color: #21252b;
     color: #abb2bf;
@@ -77,26 +75,43 @@ QListWidget::item:selected {
     color: white;
 }
 
-
+/* Style for the new editable fields in RightPanel */
 QLabel {
     color: #abb2bf;
-    padding: 5px;
+    padding-top: 6px;
+}
+
+QFormLayout QLabel { /* Specifically target labels in form layouts */
+    padding-top: 8px;
 }
 
 QDialog {
     background-color: #282c34;
 }
 
-QLineEdit {
+QLineEdit, QComboBox {
     background-color: #21252b;
     color: #abb2bf;
     border: 1px solid #3a3f4b;
     border-radius: 4px;
     padding: 6px;
+    min-height: 20px; /* Ensure a decent height */
 }
-QLineEdit:focus {
+QLineEdit:focus, QComboBox:focus {
     border-color: #5c6bc0;
 }
+QLineEdit:disabled {
+    background-color: #2c313a;
+    color: #6a7181;
+}
+
+QComboBox::drop-down {
+    border: none;
+}
+QComboBox::down-arrow {
+    image: url(noop); /* Hide default arrow if needed, or style it */
+}
+
 
 QMessageBox {
     background-color: #282c34;
