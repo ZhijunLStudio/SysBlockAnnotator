@@ -8,12 +8,16 @@ class SelectableGraphicsItem:
     """A base class for items that can be selected and show a highlight."""
     def paint_selection_highlight(self, painter: QPainter, option: QStyleOptionGraphicsItem):
         if option.state & QStyle.StateFlag.State_Selected:
-            # A very obvious highlight: a thick, bright cyan outline
-            highlight_pen = QPen(QColor(38, 220, 255), 3, Qt.PenStyle.SolidLine)
+            # Create the highlight pen
+            highlight_pen = QPen(QColor(38, 220, 255), 5, Qt.PenStyle.SolidLine)
+            
+            # --- MODIFICATION: Make the pen cosmetic ---
+            # This makes its width independent of the view's transformation (zoom).
+            highlight_pen.setCosmetic(True)
+
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(highlight_pen)
             
-            # Draw highlight around the item's shape
             if isinstance(self, QGraphicsRectItem):
                 painter.drawRect(self.rect())
             elif isinstance(self, QGraphicsPathItem):
@@ -25,11 +29,14 @@ class ComponentRectItem(QGraphicsRectItem, SelectableGraphicsItem):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setFlag(self.GraphicsItemFlag.ItemIsSelectable)
-        self.setPen(QPen(QColor("#e5c07b"), 2))
+        
+        # Make the component's own border cosmetic as well
+        pen = QPen(QColor("#e5c07b"), 2)
+        pen.setCosmetic(True)
+        self.setPen(pen)
+
         self.setBrush(QColor(229, 192, 123, 30))
         
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget: Optional[QWidget] = None) -> None:
-        # First, draw the item itself
         super().paint(painter, option, widget)
-        # Then, draw the highlight on top if selected
         self.paint_selection_highlight(painter, option)

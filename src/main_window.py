@@ -56,22 +56,28 @@ class MainWindow(QMainWindow):
         self.toggle_view_action = QAction("Toggle View", self); self.toggle_view_action.setShortcut(Qt.Key.Key_V); self.toggle_view_action.triggered.connect(self.on_toggle_connections_view)
         self.addActions([self.prev_action, self.next_action, self.toggle_view_action])
 
+    # --- THIS METHOD ENABLES TAB CYCLING ---
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key.Key_Escape:
             self._cancel_operation()
-        # --- New: Tab/Shift+Tab for component cycling in focused view ---
-        elif event.key() == Qt.Key.Key_Tab:
-            if not self.show_all_connections:
+        # Check if we are in focus mode (show selected only)
+        elif not self.show_all_connections:
+            if event.key() == Qt.Key.Key_Tab:
                 self.cycle_component_selection(forward=True)
-        elif event.key() == Qt.Key.Key_Backtab: # Shift+Tab
-            if not self.show_all_connections:
+                event.accept() # Prevent default Tab behavior
+                return
+            elif event.key() == Qt.Key.Key_Backtab: # This is Shift+Tab
                 self.cycle_component_selection(forward=False)
-        else:
-            super().keyPressEvent(event)
+                event.accept() # Prevent default Shift+Tab behavior
+                return
+        
+        # If not handled, pass to the base class
+        super().keyPressEvent(event)
 
     def _cancel_operation(self):
         if self.connection_start_node:
-            self.image_viewer.highlight_component_rect(self.connection_start_node, False)
+            # Clearing the scene selection is the correct way to deselect
+            self.image_viewer.scene.clearSelection()
             self.connection_start_node = None
         if self.current_mode != 'idle':
             self.set_mode('idle', force=True)
@@ -90,20 +96,20 @@ class MainWindow(QMainWindow):
         
         # Right Panel
         self.right_panel.file_selected.connect(self.on_file_selected)
-        self.right_panel.component_selected.connect(self.on_component_selected)
+        self.right_panel.component_selected.connect(self.on_component_selected_from_list)
         self.right_panel.component_delete_requested.connect(self.handle_component_deletion)
         self.right_panel.component_name_changed.connect(self.on_component_name_changed)
         self.right_panel.component_connections_changed.connect(self.on_component_connections_changed)
 
         # Image Viewer
         self.image_viewer.box_drawn.connect(self.on_box_drawn)
-        self.image_viewer.component_clicked.connect(self.handle_canvas_click)
+        self.image_viewer.connect_mode_clicked.connect(self.handle_connect_mode_click)
+        self.image_viewer.scene_selection_changed.connect(self._handle_scene_selection_change)
         self.image_viewer.selection_deleted.connect(self.handle_canvas_deletion)
 
     def set_mode(self, mode, force=False):
         if not force and self.current_mode != 'idle':
             self._cancel_operation()
-            return
         
         self.current_mode = mode
         if self.current_mode.startswith('connect'):
@@ -117,24 +123,18 @@ class MainWindow(QMainWindow):
         self.image_viewer.set_mode(self.current_mode, force=force)
         self.update_button_states()
 
-    def handle_canvas_click(self, component_name):
-        mode = self.current_mode
-        
-        if not component_name and 'connect' in mode:
-            self._cancel_operation()
-            return
-
-        if 'idle' in mode:
-            self.on_component_selected(component_name)
-        elif 'drawing_box' in mode:
-             self.on_component_selected(component_name)
-        elif '_source' in mode:
-            if component_name:
-                self.connection_start_node = component_name
-                self.current_mode = mode.replace('_source', '_target')
-                self.image_viewer.highlight_component_rect(component_name, True)
-                self.statusBar().showMessage(f"Source: '{component_name}'. Click the TARGET component.")
-        elif '_target' in mode:
+    def handle_connect_mode_click(self, component_name):
+        if '_source' in self.current_mode:
+            if not component_name:
+                self._cancel_operation()
+                return
+            self.connection_start_node = component_name
+            self.current_mode = self.current_mode.replace('_source', '_target')
+            # Programmatically select the item to give visual feedback
+            if component_name in self.image_viewer.component_rects:
+                self.image_viewer.component_rects[component_name].setSelected(True)
+            self.statusBar().showMessage(f"Source: '{component_name}'. Click the TARGET component.")
+        elif '_target' in self.current_mode:
             if component_name and component_name != self.connection_start_node:
                 self.create_connection(self.connection_start_node, component_name)
             else:
@@ -144,28 +144,44 @@ class MainWindow(QMainWindow):
     def create_connection(self, source, target):
         conn_type = 'output' if 'unidirectional' in self.current_mode else 'inout'
         self.data_model.add_connection(source, target, conn_type)
-        self.statusBar().showMessage(f"Success: Created {conn_type} connection.", 3000)
-        self._update_all_views()
+        self._update_all_views() # Data model changed, do a full update
 
-    def on_component_selected(self, name):
-        if self.selected_component:
-            self.image_viewer.highlight_component_rect(self.selected_component, False)
+    def _handle_scene_selection_change(self):
+        selected_items = self.image_viewer.scene.selectedItems()
+        new_selected_name = None
+        # Ensure we only care about ComponentRectItem selections
+        if selected_items and isinstance(selected_items[0], ComponentRectItem):
+            new_selected_name = selected_items[0].data(0)
+
+        if self.selected_component == new_selected_name:
+            return
+
+        self.selected_component = new_selected_name
+        self._update_ui_for_selection_change()
+
+    def on_component_selected_from_list(self, name):
+        if self.selected_component == name:
+            return
         
-        # If clicked component is different from current, select it.
-        # If clicked is same, it remains selected.
-        # If clicked is None, deselect.
-        self.selected_component = name
-        self._update_all_views()
+        # Clear previous selection in the scene
+        self.image_viewer.scene.clearSelection()
+
+        # Programmatically select the new item in the scene
+        if name and name in self.image_viewer.component_rects:
+            self.image_viewer.component_rects[name].setSelected(True)
+            # This action will trigger _handle_scene_selection_change, which is the single source of truth
 
     def on_toggle_connections_view(self):
         self.show_all_connections = not self.show_all_connections
-        # If entering focused view without a selection, select the first component
+        # If entering focus mode without a selection, select the first component
         if not self.show_all_connections and not self.selected_component and self.data_model.components:
-            first_comp = sorted(self.data_model.components.keys())[0]
-            self.on_component_selected(first_comp)
+            # Use the cycle function to select the first item
+            self.cycle_component_selection(forward=True)
         else:
-            self._update_all_views()
-
+            # Just update the connections view
+            self.image_viewer.redraw_connections(self.data_model, self.show_all_connections, self.selected_component)
+        self.update_button_states()
+    
     def on_skip_image(self):
         dialog = SkipReasonDialog(self)
         reason = dialog.get_reason()
@@ -175,20 +191,29 @@ class MainWindow(QMainWindow):
             self.save_current_annotations()
             self.go_to_next_image()
 
+    # --- THIS METHOD IMPLEMENTS THE CYCLING LOGIC ---
     def cycle_component_selection(self, forward=True):
-        comp_names = sorted(list(self.data_model.components.keys()))
-        if not comp_names: return
+        # Get the ordered list of component names from the right panel's model
+        list_widget = self.right_panel.comp_list_widget
+        comp_names = [list_widget.item(i).text() for i in range(list_widget.count())]
+        
+        if not comp_names:
+            return
 
-        if self.selected_component not in comp_names:
-            new_idx = 0
-        else:
+        try:
+            # Find the index of the currently selected component
             current_idx = comp_names.index(self.selected_component)
+            # Calculate the next index, wrapping around if necessary
             if forward:
                 new_idx = (current_idx + 1) % len(comp_names)
             else:
                 new_idx = (current_idx - 1 + len(comp_names)) % len(comp_names)
-        
-        self.on_component_selected(comp_names[new_idx])
+        except ValueError:
+            # If nothing is selected, or selection is invalid, start from the first/last item
+            new_idx = 0 if forward else -1
+
+        # Select the new component from the list
+        self.on_component_selected_from_list(comp_names[new_idx])
 
     def go_to_prev_image(self):
         idx = self.right_panel.get_current_file_index()
@@ -203,8 +228,7 @@ class MainWindow(QMainWindow):
             self.on_file_selected(item)
             
     def handle_canvas_deletion(self, selected_items):
-        comp_to_delete = None
-        did_delete_arrow = False
+        comp_to_delete, did_delete_arrow = None, False
         for item in selected_items:
             if isinstance(item, ComponentRectItem) and item.data(0):
                 comp_to_delete = item.data(0)
@@ -213,8 +237,10 @@ class MainWindow(QMainWindow):
                 self.data_model.remove_connection(item.source_name, item.target_name, item.conn_type)
                 did_delete_arrow = True
         
-        if comp_to_delete: self.handle_component_deletion(comp_to_delete)
-        elif did_delete_arrow: self._update_all_views()
+        if comp_to_delete:
+            self.handle_component_deletion(comp_to_delete)
+        elif did_delete_arrow:
+            self._update_all_views()
 
     def load_image_folder(self, folder_path):
         self.image_folder = folder_path
@@ -231,21 +257,22 @@ class MainWindow(QMainWindow):
         if self.current_image_path:
             self.save_current_annotations()
         
-        self._cancel_operation() # Reset mode to idle
+        self._cancel_operation()
         new_path = os.path.join(self.image_folder, item.text())
         if new_path == self.current_image_path: return
 
         self.current_image_path = new_path
-        self.selected_component = None
         self.right_panel.file_list_widget.setCurrentItem(item)
         
-        self.data_model.clear()
         self.image_viewer.set_image(self.current_image_path)
         self._load_annotations_for_current_image()
         self._update_all_views()
 
     def _load_annotations_for_current_image(self):
+        self.selected_component = None
+        self.data_model.clear()
         if not self.json_folder or not self.current_image_path: return
+        
         base_name = os.path.splitext(os.path.basename(self.current_image_path))[0]
         json_path = os.path.join(self.json_folder, f"{base_name}.json")
         self.data_model.load_from_json(json_path)
@@ -256,21 +283,21 @@ class MainWindow(QMainWindow):
         if name:
             try:
                 self.data_model.add_component(name, rect)
-                self.on_component_selected(name) # Select the new component
+                self._update_all_views() # Full update because data changed
+                self.on_component_selected_from_list(name) # Select the new component
             except ValueError as e:
                 QMessageBox.critical(self, "Error", str(e))
         else:
-            self._update_all_views() # Redraw to remove temp items if canceled
+            self._update_all_views() # Redraw to clear any temp items
 
     def on_component_name_changed(self, old_name, new_name):
         try:
             self.data_model.rename_component(old_name, new_name)
-            self.selected_component = new_name # Update selection to new name
+            self.selected_component = new_name # Manually update state
             self._update_all_views()
         except ValueError as e:
             QMessageBox.critical(self, "Rename Error", str(e))
-            # Revert the edit box text
-            self.right_panel.name_edit.setText(old_name)
+            self._update_ui_for_selection_change()
 
     def on_component_connections_changed(self, comp_name, conn_type, new_value_str):
         self.data_model.update_connections_from_string(comp_name, conn_type, new_value_str)
@@ -281,14 +308,12 @@ class MainWindow(QMainWindow):
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, 
                                      QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.Yes:
-            if self.selected_component == name: self.selected_component = None
             self.data_model.remove_component(name)
             self._update_all_views()
 
     def save_current_annotations(self):
         if not all([self.current_image_path, self.json_folder]): return False
         if not self.data_model.components and not self.data_model.skipped_reason: return False
-
         base_name = os.path.splitext(os.path.basename(self.current_image_path))[0]
         json_path = os.path.join(self.json_folder, f"{base_name}.json")
         os.makedirs(self.json_folder, exist_ok=True)
@@ -302,43 +327,52 @@ class MainWindow(QMainWindow):
         self.update_button_states()
         
     def _update_all_views(self):
-        # Update component list
-        comp_names = self.data_model.components.keys()
-        self.right_panel.update_component_list(comp_names)
+        """Full update. Call when data model changes (add/delete/rename/edit)."""
+        # Redraw component rects from scratch
+        self.image_viewer.redraw_component_rects(self.data_model)
+        # Update component list in the right panel
+        self.right_panel.update_component_list(self.data_model.components.keys())
+
+        # If the selected component was deleted, reset selection
+        if self.selected_component and self.selected_component not in self.data_model.components:
+             self.selected_component = None
         
-        # Update details panel
+        # Programmatically re-select the current item in the scene, if any
+        if self.selected_component:
+            if self.selected_component in self.image_viewer.component_rects:
+                self.image_viewer.component_rects[self.selected_component].setSelected(True)
+        
+        # Finally, update all UI elements based on the current (possibly new) selection
+        self._update_ui_for_selection_change()
+        self.update_button_states()
+
+    def _update_ui_for_selection_change(self):
+        """Lightweight update. Call when only the component selection changes."""
+        # Update details panel and right list widget selection
         if self.selected_component and self.selected_component in self.data_model.components:
-            details = self.data_model.components[self.selected_component]
-            self.right_panel.update_details(self.selected_component, details)
+            self.right_panel.update_details(self.selected_component, self.data_model.components[self.selected_component])
+            items = self.right_panel.comp_list_widget.findItems(self.selected_component, Qt.MatchFlag.MatchExactly)
+            if items and not items[0].isSelected():
+                # Block signals to prevent a feedback loop with on_component_selected_from_list
+                self.right_panel.comp_list_widget.blockSignals(True)
+                self.right_panel.comp_list_widget.setCurrentItem(items[0])
+                self.right_panel.comp_list_widget.blockSignals(False)
         else:
             self.right_panel.update_details(None, None)
-        
-        # Update graphics view
-        self.image_viewer.update_annotations(self.data_model, self.show_all_connections, self.selected_component)
-        
-        # Sync list selection and graphic highlight
-        if self.selected_component:
-            self.image_viewer.highlight_component_rect(self.selected_component, True)
-            items = self.right_panel.comp_list_widget.findItems(self.selected_component, Qt.MatchFlag.MatchExactly)
-            if items:
-                self.right_panel.comp_list_widget.setCurrentItem(items[0])
-        else:
             self.right_panel.comp_list_widget.clearSelection()
 
-        self.update_button_states()
+        # Redraw only the connection arrows
+        self.image_viewer.redraw_connections(self.data_model, self.show_all_connections, self.selected_component)
         
     def update_button_states(self):
         has_images = self.right_panel.get_file_count() > 0
         is_idle = 'idle' in self.current_mode
-        
-        # Annotation tools enabled if image is loaded and mode is idle
         self.left_panel.btn_connect_uni.setEnabled(has_images and is_idle)
         self.left_panel.btn_connect_bi.setEnabled(has_images and is_idle)
         self.left_panel.btn_draw_box.setEnabled(has_images and is_idle)
         self.left_panel.btn_toggle_connections.setEnabled(has_images)
         self.left_panel.update_toggle_button_text(self.show_all_connections)
         
-        # Navigation
         idx, count = self.right_panel.get_current_file_index(), self.right_panel.get_file_count()
         self.left_panel.btn_prev.setEnabled(idx > 0 and is_idle)
         self.left_panel.btn_next.setEnabled(idx < count - 1 and is_idle)
