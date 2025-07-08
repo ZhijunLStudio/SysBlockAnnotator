@@ -1,4 +1,4 @@
-# BlockAnnotator: 交互式系统框图标注工具
+# SysBlockAnnotator: 交互式系统框图标注工具
 
 ![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)
 ![PyQt6](https://img.shields.io/badge/PyQt-6-brightgreen.svg)
@@ -7,7 +7,7 @@
 一款使用 PyQt6 开发的、专为系统框图（System Block Diagram）设计的专业、高效的交互式标注工具。它旨在帮助工程师和研究人员快速识别组件、编辑属性及标注复杂的连接关系，并最终生成结构化的 JSON 数据，为下游任务（如模型训练、数据分析）提供高质量的输入。
 
 
-![BlockAnnotator Screenshot](img/ui.png) 
+![SysBlockAnnotator Screenshot](img/ui.png) 
 
 ---
 
@@ -84,18 +84,6 @@ python main.py
 5.  **保存**:
     > 程序会在切换图片或关闭时 **自动保存** 标注到您指定的 JSON 文件夹。JSON 文件名与对应的图片文件名相同。
 
-## 📦 打包为可执行文件
-
-您可以将此工具打包为单个 `.exe` (Windows) 或 `.app` (macOS) 文件，方便非开发人员使用。
-
-```bash
-# 安装打包工具
-pip install pyinstaller
-
-# 打包命令 (在Windows上)
-pyinstaller --name "BlockAnnotator" --onefile --windowed --icon="path/to/your/icon.ico" main.py
-```
-> **注意**: 强烈建议在目标操作系统上进行打包（例如，在 Windows 系统上打包 `.exe` 文件）以获得最佳兼容性。
 
 ## 📝 JSON 输出格式
 
