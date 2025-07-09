@@ -7,18 +7,16 @@ from src.widgets.base_items import ComponentRectItem
 from src.drawing_items import ArrowItem
 
 class ImageViewer(QGraphicsView):
-    # --- MODIFIED: Simplified signals ---
     box_drawn = pyqtSignal(QRectF)
-    # This signal is now the primary way to report selection changes
-    scene_selection_changed = pyqtSignal() 
-    # This signal is now only for connect mode logic
-    connect_mode_clicked = pyqtSignal(str) 
-    selection_deleted = pyqtSignal(list)
+    scene_selection_changed = pyqtSignal()
+    connect_mode_clicked = pyqtSignal(str)
+    idle_mode_clicked = pyqtSignal(list)
+    # The selection_deleted signal is no longer needed from here,
+    # as MainWindow will handle deletion.
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.scene = QGraphicsScene(self)
-        # --- MODIFIED: Connect scene's own signal to our new signal ---
         self.scene.selectionChanged.connect(self.scene_selection_changed)
         self.setScene(self.scene)
         
@@ -36,6 +34,11 @@ class ImageViewer(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
+    # --- REMOVED keyPressEvent METHOD ---
+    # By removing this, all key events will now propagate up to the MainWindow,
+    # which is exactly what we want.
+
+    # ... (all other methods from the previous version remain the same) ...
     def _clear_items(self, item_type):
         items_to_remove = [item for item in self.scene.items() if isinstance(item, item_type)]
         for item in items_to_remove:
@@ -56,12 +59,10 @@ class ImageViewer(QGraphicsView):
     def set_image(self, image_path):
         self.scene.clear()
         self.component_rects.clear()
-        
         pixmap = QPixmap(image_path)
         if pixmap.isNull():
             self.image_item = None
             return
-            
         self.image_item = QGraphicsPixmapItem(pixmap)
         self.scene.addItem(self.image_item)
         self.fitInView(self.image_item, Qt.AspectRatioMode.KeepAspectRatio)
@@ -83,7 +84,6 @@ class ImageViewer(QGraphicsView):
         if not data_model: return
         color_output, color_input, color_inout = QColor("#e06c75"), QColor("#98c379"), QColor("#61afef")
         drawn_pairs = set()
-
         for source_name, details in data_model.components.items():
             for conn_type in ['output', 'inout']:
                 for conn in details.get('connections', {}).get(conn_type, []):
@@ -98,11 +98,9 @@ class ImageViewer(QGraphicsView):
         start_item, end_item = self.component_rects[source], self.component_rects[target]
         to_draw, color = False, QColor()
         is_bidirectional = (conn_type == 'inout')
-        
         if show_all: to_draw, color = True, c_inout if is_bidirectional else c_out
         elif selected_name and (source == selected_name or target == selected_name):
             to_draw, color = True, c_inout if is_bidirectional else (c_out if source == selected_name else c_in)
-        
         if to_draw:
             line_width = 5 if not show_all else 3
             count = conn.get('count', 1)
@@ -115,13 +113,6 @@ class ImageViewer(QGraphicsView):
                 arrow = ArrowItem(start_item, end_item, color, source, target, is_bidirectional, offset=offset, line_width=line_width)
                 self.scene.addItem(arrow)
 
-    def keyPressEvent(self, event):
-        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-            selected = self.scene.selectedItems()
-            if selected: self.selection_deleted.emit(selected)
-        else: super().keyPressEvent(event)
-
-    # --- MODIFIED: Simplified mouse press logic ---
     def mousePressEvent(self, event):
         if 'drawing_box' in self.current_mode and event.button() == Qt.MouseButton.LeftButton:
             self.start_pos = self.mapToScene(event.pos())
@@ -129,18 +120,24 @@ class ImageViewer(QGraphicsView):
             rect_item.setPen(QPen(Qt.GlobalColor.cyan, 2, Qt.PenStyle.DashLine))
             self.temp_rect = rect_item
             self.scene.addItem(self.temp_rect)
-            # Don't call super, to prevent dragging while drawing
-            return 
-        elif 'connect' in self.current_mode:
-            scene_pos = self.mapToScene(event.pos())
-            item = self.itemAt(event.pos())
-            comp_name = item.data(0) if isinstance(item, ComponentRectItem) else None
-            self.connect_mode_clicked.emit(comp_name)
-            # Don't call super, to prevent dragging while connecting
             return
         
-        # In 'idle' mode, we let the base class handle the event.
-        # This allows Qt's native selection mechanism (single click, etc.) to work perfectly.
+        items_at_pos = self.items(event.pos())
+        component_items_at_pos = [item for item in items_at_pos if isinstance(item, ComponentRectItem)]
+        
+        if 'connect' in self.current_mode:
+            if component_items_at_pos:
+                component_items_at_pos.sort(key=lambda item: item.rect().width() * item.rect().height())
+                self.connect_mode_clicked.emit(component_items_at_pos[0].data(0))
+            else:
+                self.connect_mode_clicked.emit(None)
+            return
+
+        if 'idle' in self.current_mode:
+            self.idle_mode_clicked.emit(component_items_at_pos)
+            super().mousePressEvent(event)
+            return
+
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
