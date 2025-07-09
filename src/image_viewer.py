@@ -1,18 +1,19 @@
 # src/image_viewer.py
 import math
-from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
+from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QGraphicsTextItem
 from PyQt6.QtCore import Qt, QPointF, QRectF, pyqtSignal
-from PyQt6.QtGui import QPixmap, QPen, QColor, QPainter
+from PyQt6.QtGui import QPixmap, QPen, QColor, QPainter, QFont
+
+# ... (imports are the same)
 from src.widgets.base_items import ComponentRectItem
 from src.drawing_items import ArrowItem
 
 class ImageViewer(QGraphicsView):
+    # ... (signals are the same)
     box_drawn = pyqtSignal(QRectF)
     scene_selection_changed = pyqtSignal()
     connect_mode_clicked = pyqtSignal(str)
     idle_mode_clicked = pyqtSignal(list)
-    # The selection_deleted signal is no longer needed from here,
-    # as MainWindow will handle deletion.
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -21,6 +22,7 @@ class ImageViewer(QGraphicsView):
         self.setScene(self.scene)
         
         self.image_item = None
+        self.skipped_text_item = None # To hold the "SKIPPED" text
         self.current_mode = 'idle'
         self.start_pos = None
         self.temp_rect = None
@@ -34,11 +36,51 @@ class ImageViewer(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-    # --- REMOVED keyPressEvent METHOD ---
-    # By removing this, all key events will now propagate up to the MainWindow,
-    # which is exactly what we want.
+    # --- MODIFIED: set_image now just sets the image, doesn't clear annotations ---
+    def set_image(self, image_path):
+        if self.image_item:
+            self.scene.removeItem(self.image_item)
+            self.image_item = None
+            
+        pixmap = QPixmap(image_path)
+        if pixmap.isNull(): return
+            
+        self.image_item = QGraphicsPixmapItem(pixmap)
+        self.scene.addItem(self.image_item)
+        self.fitInView(self.image_item, Qt.AspectRatioMode.KeepAspectRatio)
 
-    # ... (all other methods from the previous version remain the same) ...
+    # --- NEW: clear_all_annotations method ---
+    def clear_all_annotations(self):
+        """Clears annotations and skipped text."""
+        self._clear_items(ComponentRectItem)
+        self._clear_items(ArrowItem)
+        if self.skipped_text_item:
+            self.scene.removeItem(self.skipped_text_item)
+            self.skipped_text_item = None
+        self.component_rects.clear()
+
+    # --- NEW: show_skipped_overlay method ---
+    def show_skipped_overlay(self, reason):
+        """Displays a 'Skipped' message over the image."""
+        self.clear_all_annotations()
+        if not self.image_item: return
+
+        font = QFont("Arial", 50, QFont.Weight.Bold)
+        self.skipped_text_item = QGraphicsTextItem(f"SKIPPED\nReason: {reason}")
+        self.skipped_text_item.setFont(font)
+        self.skipped_text_item.setDefaultTextColor(QColor(255, 0, 0, 150)) # Semi-transparent red
+        
+        # Center the text on the image
+        img_rect = self.image_item.boundingRect()
+        text_rect = self.skipped_text_item.boundingRect()
+        x = img_rect.center().x() - text_rect.width() / 2
+        y = img_rect.center().y() - text_rect.height() / 2
+        self.skipped_text_item.setPos(x, y)
+        
+        self.scene.addItem(self.skipped_text_item)
+
+
+    # ... (other methods are the same, just ensure they don't wrongly clear the overlay)
     def _clear_items(self, item_type):
         items_to_remove = [item for item in self.scene.items() if isinstance(item, item_type)]
         for item in items_to_remove:
@@ -56,20 +98,8 @@ class ImageViewer(QGraphicsView):
             self.setDragMode(self.DragMode.ScrollHandDrag)
             self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
 
-    def set_image(self, image_path):
-        self.scene.clear()
-        self.component_rects.clear()
-        pixmap = QPixmap(image_path)
-        if pixmap.isNull():
-            self.image_item = None
-            return
-        self.image_item = QGraphicsPixmapItem(pixmap)
-        self.scene.addItem(self.image_item)
-        self.fitInView(self.image_item, Qt.AspectRatioMode.KeepAspectRatio)
-
     def redraw_component_rects(self, data_model):
-        self._clear_items(ComponentRectItem)
-        self.component_rects.clear()
+        self.clear_all_annotations() # Ensure overlay is removed when drawing new rects
         if not data_model: return
         for name, details in data_model.components.items():
             box = details['component_box']
@@ -81,7 +111,7 @@ class ImageViewer(QGraphicsView):
             
     def redraw_connections(self, data_model, show_all, selected_name):
         self._clear_items(ArrowItem)
-        if not data_model: return
+        if not data_model or not self.component_rects: return # Don't draw if there are no components
         color_output, color_input, color_inout = QColor("#e06c75"), QColor("#98c379"), QColor("#61afef")
         drawn_pairs = set()
         for source_name, details in data_model.components.items():
@@ -114,6 +144,11 @@ class ImageViewer(QGraphicsView):
                 self.scene.addItem(arrow)
 
     def mousePressEvent(self, event):
+        if self.skipped_text_item and self.skipped_text_item.isVisible():
+             # If overlay is visible, don't allow any interaction
+            super().mousePressEvent(event) # Allows dragging
+            return
+
         if 'drawing_box' in self.current_mode and event.button() == Qt.MouseButton.LeftButton:
             self.start_pos = self.mapToScene(event.pos())
             rect_item = ComponentRectItem(QRectF(self.start_pos, self.start_pos))
