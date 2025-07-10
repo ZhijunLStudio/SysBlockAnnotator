@@ -22,6 +22,12 @@ class AnnotationData:
                     self.skipped_reason = data.get("reason", "Unknown")
                     self.components = {}
                 else:
+                    # --- MODIFICATION: Ensure 'count' exists for backward compatibility ---
+                    for comp_details in data.values():
+                        for conn_list in comp_details.get('connections', {}).values():
+                            for conn in conn_list:
+                                if 'count' not in conn:
+                                    conn['count'] = 1
                     self.components = data
                     self.skipped_reason = None
             return True
@@ -120,40 +126,55 @@ class AnnotationData:
                     if not any(c['name'] == comp_name for c in self.components[target_name]['connections'][reciprocal_type]):
                          self.components[target_name]['connections'][reciprocal_type].append({'name': comp_name, 'count': 1})
 
-
+    # --- MODIFIED: Handles connection counting ---
     def add_connection(self, source_name, target_name, conn_type):
         if source_name not in self.components or target_name not in self.components:
             return
 
+        def _update_or_add(conn_list, name_to_add):
+            """Helper to find a connection, increment its count, or add it."""
+            existing_conn = next((c for c in conn_list if c['name'] == name_to_add), None)
+            if existing_conn:
+                existing_conn['count'] = existing_conn.get('count', 1) + 1
+            else:
+                conn_list.append({"name": name_to_add, "count": 1})
+
         if conn_type == 'output':
-            # Add to source's output
-            if not any(conn['name'] == target_name for conn in self.components[source_name]['connections']['output']):
-                self.components[source_name]['connections']['output'].append({"name": target_name, "count": 1})
-            # Add to target's input
+            # Add to source's output (with count)
+            _update_or_add(self.components[source_name]['connections']['output'], target_name)
+            # Add to target's input (reciprocal, no count needed here)
             if not any(conn['name'] == source_name for conn in self.components[target_name]['connections']['input']):
                 self.components[target_name]['connections']['input'].append({"name": source_name, "count": 1})
         
         elif conn_type == 'inout':
-            # Add to both inout lists
-            if not any(conn['name'] == target_name for conn in self.components[source_name]['connections']['inout']):
-                self.components[source_name]['connections']['inout'].append({"name": target_name, "count": 1})
-            if not any(conn['name'] == source_name for conn in self.components[target_name]['connections']['inout']):
-                 self.components[target_name]['connections']['inout'].append({"name": source_name, "count": 1})
+            # Add to both inout lists symmetrically (with count)
+            _update_or_add(self.components[source_name]['connections']['inout'], target_name)
+            _update_or_add(self.components[target_name]['connections']['inout'], source_name)
 
+    # --- MODIFIED: Handles connection counting ---
     def remove_connection(self, source_name, target_name, conn_type):
         if source_name not in self.components or target_name not in self.components:
             return
 
-        def remove_from_list(comp_list, name_to_remove):
-            return [conn for conn in comp_list if conn['name'] != name_to_remove]
+        def _decrement_or_remove(conn_list, name_to_remove):
+            """Helper to find a connection, decrement its count, or remove it if count is 1."""
+            # We need to operate on a copy if we modify the list while iterating
+            conn_to_modify = next((c for c in conn_list if c['name'] == name_to_remove), None)
+            if conn_to_modify:
+                if conn_to_modify.get('count', 1) > 1:
+                    conn_to_modify['count'] -= 1
+                else:
+                    # Remove the dictionary from the list
+                    conn_list[:] = [c for c in conn_list if c['name'] != name_to_remove]
 
         if conn_type == 'output':
-            self.components[source_name]['connections']['output'] = remove_from_list(
-                self.components[source_name]['connections']['output'], target_name)
-            self.components[target_name]['connections']['input'] = remove_from_list(
-                self.components[target_name]['connections']['input'], source_name)
+            _decrement_or_remove(self.components[source_name]['connections']['output'], target_name)
+            # If the source->target connection no longer exists, remove the reciprocal
+            if not any(c['name'] == target_name for c in self.components[source_name]['connections']['output']):
+                 self.components[target_name]['connections']['input'][:] = [
+                    c for c in self.components[target_name]['connections']['input'] if c['name'] != source_name
+                 ]
         elif conn_type == 'inout':
-            self.components[source_name]['connections']['inout'] = remove_from_list(
-                self.components[source_name]['connections']['inout'], target_name)
-            self.components[target_name]['connections']['inout'] = remove_from_list(
-                self.components[target_name]['connections']['inout'], source_name)
+            # Symmetrically decrement or remove
+            _decrement_or_remove(self.components[source_name]['connections']['inout'], target_name)
+            _decrement_or_remove(self.components[target_name]['connections']['inout'], source_name)

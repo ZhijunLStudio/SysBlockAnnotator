@@ -90,6 +90,7 @@ class MainWindow(QMainWindow):
         for item in selected_items:
             if isinstance(item, ComponentRectItem) and item.data(0): comp_to_delete = item.data(0); break 
             elif isinstance(item, ArrowItem):
+                # Now correctly decrements count or removes connection
                 self.data_model.remove_connection(item.source_name, item.target_name, item.conn_type)
                 did_delete_arrow = True
         if comp_to_delete: self.handle_component_deletion(comp_to_delete)
@@ -103,38 +104,20 @@ class MainWindow(QMainWindow):
             self._update_all_views()
             self.image_viewer.scene.blockSignals(False)
             
-    # --- MODIFIED: on_file_selected is now much safer ---
     def on_file_selected(self, item):
         if not item or not self.image_folder: return
-
-        # 1. Save previous work
         if self.current_image_path: self.save_current_annotations()
-        
-        # 2. Reset any ongoing operations
         self._cancel_operation()
-        
-        # 3. Check if we are actually changing files
         new_path = os.path.join(self.image_folder, item.text())
         if new_path == self.current_image_path: return
-
-        # --- CRITICAL SECTION: Block signals to prevent race conditions ---
         self.image_viewer.scene.blockSignals(True)
-
-        # 4. Update state
         self.current_image_path = new_path
-        self.selected_component = None # Explicitly reset selection state
+        self.selected_component = None
         self.right_panel.file_list_widget.setCurrentItem(item)
-
-        # 5. Update UI that depends on the new state
         self.image_viewer.set_image(new_path)
         self._load_annotations_for_current_image()
         self._update_all_views()
-
-        # --- END CRITICAL SECTION: Re-enable signals ---
         self.image_viewer.scene.blockSignals(False)
-
-        # Manually trigger a selection change handler to ensure UI consistency,
-        # in case the scene was left in a weird state. This will select nothing.
         self._handle_scene_selection_change()
         
     def _load_annotations_for_current_image(self):
@@ -154,12 +137,16 @@ class MainWindow(QMainWindow):
             self.right_panel.update_component_list(self.data_model.components.keys())
             if self.selected_component and self.selected_component not in self.data_model.components:
                  self.selected_component = None
+            
+            # Re-select the component if it still exists
+            self.image_viewer.scene.blockSignals(True)
             if self.selected_component and self.selected_component in self.image_viewer.component_rects:
                 self.image_viewer.component_rects[self.selected_component].setSelected(True)
-            self._update_ui_for_selection_change()
+            self.image_viewer.scene.blockSignals(False)
+
+            self._update_ui_for_selection_change() # This will handle redraw of connections
         self.update_button_states()
 
-    # ... (rest of the file is the same as the last correct version) ...
     def set_mode(self, mode, force=False):
         if not force and self.current_mode != 'idle': self._cancel_operation()
         self.current_mode = mode
@@ -197,18 +184,36 @@ class MainWindow(QMainWindow):
         item_to_select = component_items[0]
         item_to_select.setSelected(True)
 
+    # --- MODIFIED: This is the critical fix for deleting arrows in local view ---
     def _handle_scene_selection_change(self):
         selected_items = self.image_viewer.scene.selectedItems()
+        
+        # Find if a component rect is part of the selection
+        selected_comp_items = [item for item in selected_items if isinstance(item, ComponentRectItem)]
+
         new_selected_name = None
-        if selected_items and isinstance(selected_items[0], ComponentRectItem): new_selected_name = selected_items[0].data(0)
-        if self.selected_component == new_selected_name: return
-        self.selected_component = new_selected_name
-        self._update_ui_for_selection_change()
+        if selected_comp_items:
+            # A component is selected. This is our new selection context.
+            new_selected_name = selected_comp_items[0].data(0)
+        elif not selected_items and self.selected_component is not None:
+            # The selection was cleared (e.g., clicked on background).
+            # new_selected_name remains None, which will clear our state.
+            pass
+        else:
+            # Something else is selected (like an ArrowItem) or the selection is unchanged.
+            # DO NOT change self.selected_component. This preserves the local view context.
+            return
+
+        # Only proceed if the component selection has actually changed.
+        if self.selected_component != new_selected_name:
+            self.selected_component = new_selected_name
+            self._update_ui_for_selection_change()
 
     def on_component_selected_from_list(self, name):
         if self.selected_component == name: return
         self.image_viewer.scene.clearSelection()
-        if name and name in self.image_viewer.component_rects: self.image_viewer.component_rects[name].setSelected(True)
+        if name and name in self.image_viewer.component_rects: 
+            self.image_viewer.component_rects[name].setSelected(True)
 
     def on_toggle_connections_view(self):
         self.show_all_connections = not self.show_all_connections
@@ -316,6 +321,8 @@ class MainWindow(QMainWindow):
         else:
             self.right_panel.update_details(None, None)
             self.right_panel.comp_list_widget.clearSelection()
+        
+        # This now becomes the single source of truth for redrawing connections
         self.image_viewer.redraw_connections(self.data_model, self.show_all_connections, self.selected_component)
         
     def update_button_states(self):
