@@ -117,7 +117,7 @@ class RightPanel(QWidget):
                 json_path = os.path.join(json_folder, f"{base_name}.json")
                 if os.path.exists(json_path):
                     try:
-                        with open(json_path, 'r') as f:
+                        with open(json_path, 'r', encoding='utf-8') as f:
                             data = json.load(f)
                             if data.get("status") == "skipped":
                                 # Style the item to indicate it's skipped

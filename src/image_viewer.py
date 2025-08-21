@@ -116,21 +116,17 @@ class ImageViewer(QGraphicsView):
 
             # Process inputs (to find connections missed by output)
             for conn in connections.get("input", []):
-                target_name = conn['name'] # Here, target is the source of the connection
+                target_name = conn['name']
                 pair = (target_name, source_name)
-                # Only add if it doesn't already exist as an output
                 if all_connections[pair]['type'] == 'none':
-                    all_connections[pair]['type'] = 'output' # It's an output from target to source
-                    # The count isn't specified on input, so default to 1
+                    all_connections[pair]['type'] = 'output'
                     all_connections[pair]['count'] = 1 
             
             # Process inouts
             for conn in connections.get("inout", []):
                 target_name = conn['name']
-                # Use a sorted tuple to represent the undirected pair
                 pair = tuple(sorted((source_name, target_name)))
                 all_connections[pair]['type'] = 'inout'
-                # For inout, counts can be on either side, take the max
                 all_connections[pair]['count'] = max(
                     all_connections[pair]['count'], conn.get('count', 1)
                 )
@@ -141,30 +137,42 @@ class ImageViewer(QGraphicsView):
             if conn_type == 'none': continue
 
             source, target = pair[0], pair[1]
-            if conn_type == 'inout': # The pair was sorted for uniqueness
+            if conn_type == 'inout':
                 source, target = pair[0], pair[1]
             
-            # Skip if components don't exist on the canvas
             if source not in self.component_rects or target not in self.component_rects:
                 continue
 
-            # Determine visibility and color
-            is_bidirectional = (conn_type == 'inout')
-            is_problem = (source, target, conn_type) in problem_connections or \
-                         (target, source, conn_type) in problem_connections
+            # --- FIX: REVISED VISIBILITY AND COLOR LOGIC ---
             
+            # 1. First, determine if the arrow should be drawn AT ALL based on the view mode.
             draw_this_arrow = False
-            final_color = QColor()
-            
-            if is_problem:
-                draw_this_arrow, final_color = True, color_problem
-            elif show_all:
-                draw_this_arrow, final_color = True, color_inout if is_bidirectional else color_output
+            if show_all:
+                draw_this_arrow = True
             elif selected_name and (source == selected_name or target == selected_name):
-                draw_this_arrow, final_color = True, color_inout if is_bidirectional else (color_output if source == selected_name else color_input)
+                draw_this_arrow = True
 
-            # Step 3: Draw the arrow if it's visible
+            # 2. If it should be drawn, THEN determine its color and properties.
             if draw_this_arrow:
+                is_bidirectional = (conn_type == 'inout')
+                is_problem = (source, target, conn_type) in problem_connections or \
+                             (target, source, conn_type) in problem_connections
+
+                final_color = QColor()
+                if is_problem:
+                    final_color = color_problem
+                else:
+                    # In "selected only" mode, color depends on direction relative to selection
+                    if not show_all and selected_name:
+                        if is_bidirectional:
+                            final_color = color_inout
+                        else:
+                            final_color = color_output if source == selected_name else color_input
+                    # In "show all" mode, or if no selection, use default colors
+                    else:
+                        final_color = color_inout if is_bidirectional else color_output
+
+                # Step 3: Draw the arrow(s)
                 start_item = self.component_rects[source]
                 end_item = self.component_rects[target]
                 count = info['count']

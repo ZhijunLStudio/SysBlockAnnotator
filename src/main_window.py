@@ -183,15 +183,23 @@ class MainWindow(QMainWindow):
         item_to_select = component_items[0]
         item_to_select.setSelected(True)
 
+    # --- FIX: Replace this entire method ---
     def _handle_scene_selection_change(self):
+        """
+        Handles selection changes in the scene correctly, including deselection.
+        """
+        # 1. 确定新的选中组件名称 (可以是 None)
         selected_items = self.image_viewer.scene.selectedItems()
         selected_comp_items = [item for item in selected_items if isinstance(item, ComponentRectItem)]
+        
         new_selected_name = None
-        if selected_comp_items: new_selected_name = selected_comp_items[0].data(0)
-        elif not selected_items and self.selected_component is not None: pass
-        else: return
+        if selected_comp_items:
+            new_selected_name = selected_comp_items[0].data(0)
+
+        # 2. 如果新的选中状态与旧的不同，则更新UI
         if self.selected_component != new_selected_name:
-            self.selected_component = new_selected_name; self._update_ui_for_selection_change()
+            self.selected_component = new_selected_name
+            self._update_ui_for_selection_change()
 
     def on_component_selected_from_list(self, name):
         if self.selected_component == name: return
