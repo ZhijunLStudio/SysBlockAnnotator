@@ -26,8 +26,6 @@ class MainWindow(QMainWindow):
         self.connection_start_node = None
         self.show_all_connections = True 
         
-        # --- MODIFICATION: Add member variable for problem connections ---
-        self.problem_connections = set()
 
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
@@ -117,17 +115,9 @@ class MainWindow(QMainWindow):
         json_path = os.path.join(self.json_folder, f"{base_name}.json")
         self.data_model.load_from_json(json_path)
     
-    # --- MODIFICATION: Add a dedicated method to check connection health ---
-    def _update_connection_health(self):
-        """Checks for non-reciprocal connections and stores them."""
-        if not self.data_model.skipped_reason:
-            self.problem_connections = self.data_model.get_non_reciprocal_connections()
-        else:
-            self.problem_connections = set()
 
     # --- MODIFICATION: Call health check before updating views ---
     def _update_all_views(self):
-        self._update_connection_health() # Check health before redrawing anything
         
         if self.data_model.skipped_reason:
             self.image_viewer.show_skipped_overlay(self.data_model.skipped_reason)
@@ -211,7 +201,9 @@ class MainWindow(QMainWindow):
     def on_toggle_connections_view(self):
         self.show_all_connections = not self.show_all_connections
         if not self.show_all_connections and not self.selected_component and self.data_model.components: self.cycle_component_selection(forward=True)
-        else: self.image_viewer.redraw_connections(self.data_model, self.show_all_connections, self.selected_component, self.problem_connections)
+        else:
+            # --- MODIFICATION: Remove the last argument ---
+            self.image_viewer.redraw_connections(self.data_model, self.show_all_connections, self.selected_component)
         self.update_button_states()
     
     def on_skip_image(self, reason: str):
@@ -293,7 +285,7 @@ class MainWindow(QMainWindow):
             self.right_panel.comp_list_widget.clearSelection()
         
         # This now becomes the single source of truth for redrawing connections
-        self.image_viewer.redraw_connections(self.data_model, self.show_all_connections, self.selected_component, self.problem_connections)
+        self.image_viewer.redraw_connections(self.data_model, self.show_all_connections, self.selected_component)
         
     def update_button_states(self):
         has_images = self.right_panel.get_file_count() > 0; is_idle = 'idle' in self.current_mode; is_skipped = self.data_model.skipped_reason is not None

@@ -92,39 +92,31 @@ class ImageViewer(QGraphicsView):
     # ##################################################################
     # #         --- MODIFICATION: Complete Rewrite of Drawing Logic ---#
     # ##################################################################
-    def redraw_connections(self, data_model, show_all, selected_name, problem_connections):
+    def redraw_connections(self, data_model, show_all, selected_name):
         self._clear_items(ArrowItem)
         if not data_model or not self.component_rects: return
         
         color_output = QColor("#e06c75")
         color_input = QColor("#98c379")
         color_inout = QColor("#61afef")
-        color_problem = QColor("#d19a66") # Bright Orange
-
-        # Step 1: Build a complete, unified map of all connections
+        
+        # Step 1: Build a simplified map of connections from output and inout fields
         all_connections = defaultdict(lambda: {'type': 'none', 'count': 0})
 
         for source_name, details in data_model.components.items():
             connections = details.get("connections", {})
             
-            # Process outputs
+            # Process outputs (unidirectional)
             for conn in connections.get("output", []):
                 target_name = conn['name']
                 pair = (source_name, target_name)
                 all_connections[pair]['type'] = 'output'
                 all_connections[pair]['count'] = conn.get('count', 1)
 
-            # Process inputs (to find connections missed by output)
-            for conn in connections.get("input", []):
-                target_name = conn['name']
-                pair = (target_name, source_name)
-                if all_connections[pair]['type'] == 'none':
-                    all_connections[pair]['type'] = 'output'
-                    all_connections[pair]['count'] = 1 
-            
-            # Process inouts
+            # Process inouts (bidirectional)
             for conn in connections.get("inout", []):
                 target_name = conn['name']
+                # Use a sorted tuple to represent the undirected pair
                 pair = tuple(sorted((source_name, target_name)))
                 all_connections[pair]['type'] = 'inout'
                 all_connections[pair]['count'] = max(
@@ -137,47 +129,38 @@ class ImageViewer(QGraphicsView):
             if conn_type == 'none': continue
 
             source, target = pair[0], pair[1]
-            if conn_type == 'inout':
-                source, target = pair[0], pair[1]
             
             if source not in self.component_rects or target not in self.component_rects:
                 continue
 
-            # --- FIX: REVISED VISIBILITY AND COLOR LOGIC ---
-            
-            # 1. First, determine if the arrow should be drawn AT ALL based on the view mode.
+            # 1. Determine if the arrow should be drawn based on the view mode.
             draw_this_arrow = False
             if show_all:
                 draw_this_arrow = True
             elif selected_name and (source == selected_name or target == selected_name):
                 draw_this_arrow = True
 
-            # 2. If it should be drawn, THEN determine its color and properties.
+            # 2. If it should be drawn, determine its color and properties.
             if draw_this_arrow:
                 is_bidirectional = (conn_type == 'inout')
-                is_problem = (source, target, conn_type) in problem_connections or \
-                             (target, source, conn_type) in problem_connections
-
+                
                 final_color = QColor()
-                if is_problem:
-                    final_color = color_problem
+                # In "selected only" mode, color depends on direction relative to selection
+                if not show_all and selected_name:
+                    if is_bidirectional:
+                        final_color = color_inout
+                    else: # It's an 'output' type
+                        final_color = color_output if source == selected_name else color_input
+                # In "show all" mode, or if no selection, use default colors
                 else:
-                    # In "selected only" mode, color depends on direction relative to selection
-                    if not show_all and selected_name:
-                        if is_bidirectional:
-                            final_color = color_inout
-                        else:
-                            final_color = color_output if source == selected_name else color_input
-                    # In "show all" mode, or if no selection, use default colors
-                    else:
-                        final_color = color_inout if is_bidirectional else color_output
+                    final_color = color_inout if is_bidirectional else color_output
 
-                # Step 3: Draw the arrow(s)
+                # 3. Draw the arrow(s)
                 start_item = self.component_rects[source]
                 end_item = self.component_rects[target]
                 count = info['count']
 
-                line_width = 5 if is_problem or not show_all else 3
+                line_width = 5 if not show_all else 3 # Thicker lines when focused
                 line_vec = end_item.sceneBoundingRect().center() - start_item.sceneBoundingRect().center()
                 if line_vec.isNull(): continue
                 perp_vec = QPointF(line_vec.y(), -line_vec.x())

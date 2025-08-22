@@ -9,7 +9,7 @@ class AnnotationData:
         self.image_path = None
         self.skipped_reason = None
 
-    # --- NO CHANGES to existing methods here ---
+    # --- NO CHANGES to clear, load_from_json, save_to_json, add_component ---
     def clear(self):
         self.components.clear()
         self.image_path = None
@@ -61,15 +61,18 @@ class AnnotationData:
             "connections": {"input": [], "output": [], "inout": []}
         }
 
+    # --- MODIFICATION: Simplified remove_component ---
     def remove_component(self, name):
         if name in self.components:
             del self.components[name]
+            # Now we only need to clean up connections TO the deleted component
             for comp_name, details in self.components.items():
                 for conn_type in ["input", "output", "inout"]:
                     details["connections"][conn_type] = [
                         conn for conn in details["connections"][conn_type] if conn["name"] != name
                     ]
 
+    # --- NO CHANGE to rename_component ---
     def rename_component(self, old_name, new_name):
         if new_name in self.components:
             raise ValueError(f"Component name '{new_name}' already exists.")
@@ -84,6 +87,7 @@ class AnnotationData:
                     if conn["name"] == old_name:
                         conn["name"] = new_name
     
+    # --- MODIFICATION: Simplified update_connections_from_string ---
     def update_connections_from_string(self, comp_name, conn_type, conn_str):
         if comp_name not in self.components: return
 
@@ -98,9 +102,12 @@ class AnnotationData:
                 new_conns.append({'name': part, 'count': 1})
         
         old_conns = self.components[comp_name]['connections'][conn_type]
-        reciprocal_type = {'output': 'input', 'input': 'output', 'inout': 'inout'}.get(conn_type)
+        
+        # Reciprocity now only applies to 'inout' type connections
+        reciprocal_type = {'inout': 'inout'}.get(conn_type)
         
         if reciprocal_type:
+            # Remove old reciprocal connections
             for old_conn in old_conns:
                 target_name = old_conn['name']
                 if target_name in self.components:
@@ -108,15 +115,18 @@ class AnnotationData:
                         c for c in self.components[target_name]['connections'][reciprocal_type] if c['name'] != comp_name
                     ]
 
+        # Set the new connections for the source component
         self.components[comp_name]['connections'][conn_type] = new_conns
         
         if reciprocal_type:
+            # Add new reciprocal connections
             for new_conn in new_conns:
                 target_name = new_conn['name']
                 if target_name in self.components and target_name != comp_name:
                     if not any(c['name'] == comp_name for c in self.components[target_name]['connections'][reciprocal_type]):
                          self.components[target_name]['connections'][reciprocal_type].append({'name': comp_name, 'count': 1})
 
+    # --- MODIFICATION: Simplified add_connection ---
     def add_connection(self, source_name, target_name, conn_type):
         if source_name not in self.components or target_name not in self.components:
             return
@@ -129,14 +139,15 @@ class AnnotationData:
                 conn_list.append({"name": name_to_add, "count": 1})
 
         if conn_type == 'output':
+            # ONLY add to the source's output list
             _update_or_add(self.components[source_name]['connections']['output'], target_name)
-            if not any(conn['name'] == source_name for conn in self.components[target_name]['connections']['input']):
-                self.components[target_name]['connections']['input'].append({"name": source_name, "count": 1})
         
         elif conn_type == 'inout':
+            # inout remains reciprocal
             _update_or_add(self.components[source_name]['connections']['inout'], target_name)
             _update_or_add(self.components[target_name]['connections']['inout'], source_name)
 
+    # --- MODIFICATION: Simplified remove_connection ---
     def remove_connection(self, source_name, target_name, conn_type):
         if source_name not in self.components or target_name not in self.components:
             return
@@ -150,60 +161,12 @@ class AnnotationData:
                     conn_list[:] = [c for c in conn_list if c['name'] != name_to_remove]
 
         if conn_type == 'output':
+            # ONLY remove from the source's output list
             _decrement_or_remove(self.components[source_name]['connections']['output'], target_name)
-            if not any(c['name'] == target_name for c in self.components[source_name]['connections']['output']):
-                 self.components[target_name]['connections']['input'][:] = [
-                    c for c in self.components[target_name]['connections']['input'] if c['name'] != source_name
-                 ]
         elif conn_type == 'inout':
+            # inout remains reciprocal
             _decrement_or_remove(self.components[source_name]['connections']['inout'], target_name)
             _decrement_or_remove(self.components[target_name]['connections']['inout'], source_name)
 
-    # --- MODIFICATION ---
-    # ADD THE NEW METHOD HERE
-    def get_non_reciprocal_connections(self):
-        """
-        Scans all connections and returns a set of non-reciprocal ones.
-        The set contains tuples like (source_name, target_name, conn_type).
-        This method is read-only and does not modify data.
-        """
-        problem_connections = set()
-
-        for source_name, source_details in self.components.items():
-            connections = source_details.get("connections", {})
-
-            # Check output -> input
-            for conn in connections.get("output", []):
-                target_name = conn.get("name")
-                if target_name not in self.components:
-                    problem_connections.add((source_name, target_name, "output"))
-                    continue
-                
-                target_inputs = self.components[target_name].get("connections", {}).get("input", [])
-                if not any(c.get("name") == source_name for c in target_inputs):
-                    problem_connections.add((source_name, target_name, "output"))
-
-            # Check input -> output
-            for conn in connections.get("input", []):
-                target_name = conn.get("name")
-                if target_name not in self.components:
-                    problem_connections.add((target_name, source_name, "output"))
-                    continue
-                
-                target_outputs = self.components[target_name].get("connections", {}).get("output", [])
-                if not any(c.get("name") == source_name for c in target_outputs):
-                    # We add the "output" side of the problem, as that's what we draw
-                    problem_connections.add((target_name, source_name, "output"))
-
-            # Check inout <-> inout
-            for conn in connections.get("inout", []):
-                target_name = conn.get("name")
-                if target_name not in self.components:
-                    problem_connections.add((source_name, target_name, "inout"))
-                    continue
-                
-                target_inouts = self.components[target_name].get("connections", {}).get("inout", [])
-                if not any(c.get("name") == source_name for c in target_inouts):
-                    problem_connections.add((source_name, target_name, "inout"))
-        
-        return problem_connections
+    # --- REMOVED: get_non_reciprocal_connections is no longer needed ---
+    # The entire method has been deleted.
