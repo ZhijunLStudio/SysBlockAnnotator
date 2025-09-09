@@ -1,4 +1,3 @@
-# src/image_viewer.py
 import math
 from collections import defaultdict
 from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QGraphicsTextItem
@@ -9,7 +8,7 @@ from src.widgets.base_items import ComponentRectItem
 from src.drawing_items import ArrowItem
 
 class ImageViewer(QGraphicsView):
-    # --- NO CHANGES to signals ---
+    # --- 信号部分无变化 ---
     box_drawn = pyqtSignal(QRectF)
     scene_selection_changed = pyqtSignal()
     connect_mode_clicked = pyqtSignal(str)
@@ -36,7 +35,7 @@ class ImageViewer(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     
-    # --- NO CHANGES to most methods ---
+    # --- 其他大部分方法无变化 ---
     def set_image(self, image_path):
         if self.image_item: self.scene.removeItem(self.image_item); self.image_item = None
         pixmap = QPixmap(image_path)
@@ -89,90 +88,124 @@ class ImageViewer(QGraphicsView):
             self.scene.addItem(rect_item)
             self.component_rects[name] = rect_item
 
-    # ##################################################################
-    # #         --- MODIFICATION: Complete Rewrite of Drawing Logic ---#
-    # ##################################################################
+    ##################################################################
+    #         --- 带新颜色方案的连接绘制逻辑 ---#
+    ##################################################################
     def redraw_connections(self, data_model, show_all, selected_name):
         self._clear_items(ArrowItem)
-        if not data_model or not self.component_rects: return
-        
-        color_output = QColor("#e06c75")
-        color_input = QColor("#98c379")
-        color_inout = QColor("#61afef")
-        
-        # Step 1: Build a simplified map of connections from output and inout fields
-        all_connections = defaultdict(lambda: {'type': 'none', 'count': 0})
+        if not data_model or not self.component_rects:
+            return
 
-        for source_name, details in data_model.components.items():
+        # 步骤 1: 统一收集所有连接
+        all_connections = []
+        processed_inout_pairs = set()
+
+        for comp_name, details in data_model.components.items():
             connections = details.get("connections", {})
             
-            # Process outputs (unidirectional)
+            # 处理 'input' (箭头指向当前组件)
+            for conn in connections.get("input", []):
+                all_connections.append({
+                    'source': conn.get('name'),
+                    'target': comp_name,
+                    'status': conn.get('status'),
+                    'is_bidirectional': False
+                })
+
+            # 处理 'output' (箭头从当前组件出发)
             for conn in connections.get("output", []):
-                target_name = conn['name']
-                pair = (source_name, target_name)
-                all_connections[pair]['type'] = 'output'
-                all_connections[pair]['count'] = conn.get('count', 1)
+                all_connections.append({
+                    'source': comp_name,
+                    'target': conn.get('name'),
+                    'status': conn.get('status'),
+                    'is_bidirectional': False
+                })
 
-            # Process inouts (bidirectional)
+            # 处理 'inout' (双向), 并避免重复
             for conn in connections.get("inout", []):
-                target_name = conn['name']
-                # Use a sorted tuple to represent the undirected pair
-                pair = tuple(sorted((source_name, target_name)))
-                all_connections[pair]['type'] = 'inout'
-                all_connections[pair]['count'] = max(
-                    all_connections[pair]['count'], conn.get('count', 1)
-                )
+                target_name = conn.get('name')
+                pair = tuple(sorted((comp_name, target_name)))
+                if pair not in processed_inout_pairs:
+                    processed_inout_pairs.add(pair)
+                    all_connections.append({
+                        'source': comp_name,
+                        'target': target_name,
+                        'status': conn.get('status'),
+                        'is_bidirectional': True
+                    })
 
-        # Step 2: Iterate through the unified map and draw
-        for pair, info in all_connections.items():
-            conn_type = info['type']
-            if conn_type == 'none': continue
+        # 步骤 2: 按物理连接对进行分组，以便处理偏移
+        connection_groups = defaultdict(list)
+        for conn_info in all_connections:
+            source_name = conn_info.get('source')
+            target_name = conn_info.get('target')
 
-            source, target = pair[0], pair[1]
-            
-            if source not in self.component_rects or target not in self.component_rects:
+            # 过滤掉不存在的组件连接
+            if source_name not in self.component_rects or target_name not in self.component_rects:
                 continue
+                
+            pair = tuple(sorted((source_name, target_name)))
+            connection_groups[pair].append(conn_info)
 
-            # 1. Determine if the arrow should be drawn based on the view mode.
-            draw_this_arrow = False
-            if show_all:
-                draw_this_arrow = True
-            elif selected_name and (source == selected_name or target == selected_name):
-                draw_this_arrow = True
+        # 步骤 3: 遍历分组并绘制所有箭头
+        for pair, conn_list in connection_groups.items():
+            count = len(conn_list)
+            
+            p1_name, p2_name = pair
+            start_item = self.component_rects[p1_name]
+            end_item = self.component_rects[p2_name]
 
-            # 2. If it should be drawn, determine its color and properties.
-            if draw_this_arrow:
-                is_bidirectional = (conn_type == 'inout')
+            # 计算用于偏移的垂直向量
+            line_vec = end_item.sceneBoundingRect().center() - start_item.sceneBoundingRect().center()
+            if line_vec.isNull(): continue
+            perp_vec = QPointF(line_vec.y(), -line_vec.x())
+            norm_perp = perp_vec / math.sqrt(QPointF.dotProduct(perp_vec, perp_vec)) if not perp_vec.isNull() else QPointF()
+
+            for i, conn_info in enumerate(conn_list):
+                # 确定是否应绘制此箭头
+                should_draw = show_all or (selected_name and (conn_info['source'] == selected_name or conn_info['target'] == selected_name))
+                if not should_draw:
+                    continue
+
+                # **核心修改: 根据您的新规则设置颜色**
+                status = conn_info.get('status')
+                is_bidirectional = conn_info.get('is_bidirectional')
                 
                 final_color = QColor()
-                # In "selected only" mode, color depends on direction relative to selection
-                if not show_all and selected_name:
-                    if is_bidirectional:
-                        final_color = color_inout
-                    else: # It's an 'output' type
-                        final_color = color_output if source == selected_name else color_input
-                # In "show all" mode, or if no selection, use default colors
+                # 优先级 1 & 2: 错误状态优先
+                if status == "WRONG_PREDICTION":
+                    final_color = QColor("#e5c07b")  # 黄色
+                elif status == "MISSED_GROUND_TRUTH":
+                    final_color = QColor("#c678dd")  # 紫色
+                # 优先级 3: 正常连接的类型
+                elif is_bidirectional:
+                    final_color = QColor("#61afef")  # 蓝色 (正常的inout)
+                elif status == "CORRECT":
+                    final_color = QColor("#98c379")  # 绿色 (正确的单向)
+                # 备用颜色
                 else:
-                    final_color = color_inout if is_bidirectional else color_output
+                    final_color = QColor("#abb2bf")  # 灰色 (用于未知状态)
 
-                # 3. Draw the arrow(s)
-                start_item = self.component_rects[source]
-                end_item = self.component_rects[target]
-                count = info['count']
+                line_width = 5 if not show_all else 3
+                # 为平行线计算偏移量
+                offset = norm_perp * ((i - (count - 1) / 2.0) * 15.0)
 
-                line_width = 5 if not show_all else 3 # Thicker lines when focused
-                line_vec = end_item.sceneBoundingRect().center() - start_item.sceneBoundingRect().center()
-                if line_vec.isNull(): continue
-                perp_vec = QPointF(line_vec.y(), -line_vec.x())
-                norm_perp = perp_vec / math.sqrt(QPointF.dotProduct(perp_vec, perp_vec)) if not perp_vec.isNull() else QPointF()
-                
-                for i in range(count):
-                    offset = norm_perp * ((i - (count - 1) / 2.0) * 15.0)
-                    arrow = ArrowItem(start_item, end_item, final_color, source, target, is_bidirectional, offset=offset, line_width=line_width)
-                    self.scene.addItem(arrow)
+                arrow_source_item = self.component_rects[conn_info['source']]
+                arrow_target_item = self.component_rects[conn_info['target']]
 
+                arrow = ArrowItem(
+                    start_item=arrow_source_item,
+                    end_item=arrow_target_item,
+                    color=final_color,
+                    source_name=conn_info['source'],
+                    target_name=conn_info['target'],
+                    is_bidirectional=conn_info['is_bidirectional'],
+                    offset=offset,
+                    line_width=line_width
+                )
+                self.scene.addItem(arrow)
 
-    # --- NO CHANGES to mouse events or resizeEvent ---
+    # --- 鼠标事件和resizeEvent无变化 ---
     def mousePressEvent(self, event):
         if self.skipped_text_item and self.skipped_text_item.isVisible(): super().mousePressEvent(event); return
         if 'drawing_box' in self.current_mode and event.button() == Qt.MouseButton.LeftButton:
